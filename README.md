@@ -26,9 +26,9 @@ API 负责：
 
 - 历史日线
 - Quote 当前价
-- Stock news
-- Earnings calendar
-- Economic calendar
+- Stock news：优先 FMP；如果套餐不可用，自动兜底 Google News RSS
+- Earnings calendar：优先 FMP；如果套餐不可用则跳过
+- Economic calendar：优先 FMP；如果套餐不可用则跳过，也可以通过 `manual_events` 手动传入关键事件
 
 需要环境变量：
 
@@ -115,6 +115,9 @@ outputs/online_stock_monitor_api/n8n_online_discord_workflow.json
   "provider": "fmp",
   "include_news": true,
   "include_events": true,
+  "manual_events": [
+    {"date": "2026-07-08", "time": "14:00 ET", "title": "FOMC Minutes", "impact": "high", "tickers": ["ALL"]}
+  ],
   "lookahead_days": 7,
   "send_discord": false,
   "stocks": [
@@ -130,6 +133,17 @@ outputs/online_stock_monitor_api/n8n_online_discord_workflow.json
 ```
 
 `current_price` 可选。如果不传，API 会用行情源 quote 的当前价；如果你在 n8n 里有更好的盘前/盘中报价，可以传进来覆盖。
+
+`manual_events` 可选。适合在 FMP 套餐没有宏观日历权限时，手动补充未来一周会影响行情的事件，例如 FOMC、CPI、PPI、非农、GDP、NVDA/AMZN 财报等。`tickers` 填 `["ALL"]` 表示所有股票都展示；填 `["NVDA"]` 表示只展示给 NVDA。
+
+## FMP 套餐限制
+
+如果你的 FMP 套餐不能访问新闻或宏观日历，服务仍然可以正常工作：
+
+- 点位模型依赖历史日线和 quote，只要这两个接口可用，支撑/阻力/做 T 区间就能计算。
+- 新闻会自动尝试 Google News RSS 兜底。
+- 宏观日历拿不到时不会中断 `/monitor`，需要时用 `manual_events` 补充。
+- `/debug/provider/NVDA` 会分项显示 `historical_ok`、`quote_ok`、`news_ok`、`economic_calendar_ok`，方便排查是哪一类数据源不可用。
 
 ## 免责声明
 
