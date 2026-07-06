@@ -6,7 +6,8 @@ import urllib.request
 from datetime import datetime
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from model import ModelParams, classify_position, compact_zone, generate_levels, nearest_levels, normalize_prices
@@ -14,6 +15,17 @@ from providers import get_provider
 
 
 app = FastAPI(title="Online Stock Point Monitor", version="1.0.0")
+
+
+@app.exception_handler(Exception)
+def unhandled_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": f"{type(exc).__name__}: {exc}",
+            "path": str(request.url.path),
+        },
+    )
 
 
 class StockConfig(BaseModel):
@@ -90,14 +102,23 @@ def mode_plan(mode, reference_price, filtered):
 
 def render_stock(mode, stock, provider):
     ticker = stock.ticker.upper()
-    if stock.prices:
-        raw_prices = stock.prices
-    else:
-        raw_prices = provider.historical_prices(ticker)
+    try:
+        if stock.prices:
+            raw_prices = stock.prices
+        else:
+            raw_prices = provider.historical_prices(ticker)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"{ticker}: historical prices failed: {type(exc).__name__}: {exc}")
     if len(raw_prices) < 220:
         raise HTTPException(status_code=400, detail=f"{ticker}: not enough historical price rows")
-    rows = normalize_prices(raw_prices)
-    quote = provider.quote(ticker) if provider else {}
+    try:
+        rows = normalize_prices(raw_prices)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"{ticker}: price normalization failed: {type(exc).__name__}: {exc}")
+    try:
+        quote = provider.quote(ticker) if provider else {}
+    except Exception as exc:
+        quote = {"error": f"{type(exc).__name__}: {exc}"}
     reference_price = stock.current_price or quote.get("price") or rows[-1]["Close"]
     params = ModelParams(grid_step=stock.grid_step, lookback=stock.lookback, min_score=stock.min_score)
     levels, meta = generate_levels(rows, params=params)
@@ -139,6 +160,27 @@ def render_stock(mode, stock, provider):
 @app.get("/health")
 def health():
     return {"ok": True, "time": datetime.utcnow().isoformat() + "Z"}
+
+
+@app.get("/debug/provider/{ticker}")
+def debug_provider(ticker: str, provider: str = "fmp"):
+    try:
+        data_provider = get_provider(provider)
+        prices = data_provider.historical_prices(ticker.upper(), days=260)
+        quote = data_provider.quote(ticker.upper())
+        news = data_provider.news(ticker.upper(), limit=1)
+        return {
+            "ok": True,
+            "provider": provider,
+            "ticker": ticker.upper(),
+            "price_rows": len(prices),
+            "first_date": prices[0]["date"] if prices else None,
+            "last_date": prices[-1]["date"] if prices else None,
+            "quote": quote,
+            "news_sample": news[:1],
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}")
 
 
 @app.post("/monitor")
