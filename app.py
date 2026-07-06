@@ -43,6 +43,7 @@ class MonitorRequest(BaseModel):
     stocks: list[StockConfig]
     include_news: bool = True
     include_events: bool = True
+    manual_events: list[dict[str, Any]] = Field(default_factory=list)
     lookahead_days: int = 7
     send_discord: bool = False
     discord_webhook_url: str | None = None
@@ -164,23 +165,33 @@ def health():
 
 @app.get("/debug/provider/{ticker}")
 def debug_provider(ticker: str, provider: str = "fmp"):
+    data_provider = get_provider(provider)
+    result = {"ok": True, "provider": provider, "ticker": ticker.upper()}
     try:
-        data_provider = get_provider(provider)
         prices = data_provider.historical_prices(ticker.upper(), days=260)
-        quote = data_provider.quote(ticker.upper())
-        news = data_provider.news(ticker.upper(), limit=1)
-        return {
-            "ok": True,
-            "provider": provider,
-            "ticker": ticker.upper(),
-            "price_rows": len(prices),
-            "first_date": prices[0]["date"] if prices else None,
-            "last_date": prices[-1]["date"] if prices else None,
-            "quote": quote,
-            "news_sample": news[:1],
-        }
+        result.update(
+            {
+                "historical_ok": True,
+                "price_rows": len(prices),
+                "first_date": prices[0]["date"] if prices else None,
+                "last_date": prices[-1]["date"] if prices else None,
+            }
+        )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}")
+        result.update({"ok": False, "historical_ok": False, "historical_error": f"{type(exc).__name__}: {exc}"})
+    try:
+        result.update({"quote_ok": True, "quote": data_provider.quote(ticker.upper())})
+    except Exception as exc:
+        result.update({"ok": False, "quote_ok": False, "quote_error": f"{type(exc).__name__}: {exc}"})
+    try:
+        result.update({"news_ok": True, "news_sample": data_provider.news(ticker.upper(), limit=1)})
+    except Exception as exc:
+        result.update({"news_ok": False, "news_error": f"{type(exc).__name__}: {exc}"})
+    try:
+        result.update({"economic_calendar_ok": True, "economic_calendar_sample": data_provider.economic_calendar(7)[:3]})
+    except Exception as exc:
+        result.update({"economic_calendar_ok": False, "economic_calendar_error": f"{type(exc).__name__}: {exc}"})
+    return result
 
 
 @app.post("/monitor")
@@ -193,12 +204,12 @@ def monitor(req: MonitorRequest):
         else:
             raise HTTPException(status_code=400, detail=str(exc))
 
-    all_events = []
+    all_events = list(req.manual_events)
     if req.include_events and provider:
         try:
-            all_events = provider.economic_calendar(req.lookahead_days)
+            all_events.extend(provider.economic_calendar(req.lookahead_days))
         except Exception as exc:
-            all_events = [{"title": f"事件日历读取失败: {exc}", "tickers": ["ALL"]}]
+            all_events.append({"title": f"事件日历读取失败: {exc}", "tickers": ["ALL"]})
 
     messages = []
     records = []
@@ -220,8 +231,8 @@ def monitor(req: MonitorRequest):
         if req.include_news and provider:
             try:
                 news = provider.news(ticker, limit=3)
-            except Exception as exc:
-                news = [{"title": f"新闻读取失败: {exc}"}]
+            except Exception:
+                news = []
         if news:
             lines.append("")
             lines.append("近期新闻:")
