@@ -20,7 +20,7 @@ class FMPProvider:
         self.api_key = api_key or os.environ.get("FMP_API_KEY")
         if not self.api_key:
             raise ValueError("FMP_API_KEY is required for provider=fmp")
-        self.base = os.environ.get("FMP_BASE_URL", "https://financialmodelingprep.com/api/v3")
+        self.base = os.environ.get("FMP_BASE_URL", "https://financialmodelingprep.com/stable")
 
     def _url(self, path, **params):
         if "from_" in params:
@@ -29,10 +29,17 @@ class FMPProvider:
         return f"{self.base}{path}?{urllib.parse.urlencode(params)}"
 
     def historical_prices(self, ticker, days=650):
-        url = self._url(f"/historical-price-full/{ticker}", timeseries=days)
+        url = self._url("/historical-price-eod/full", symbol=ticker)
         data = http_json(url)
         rows = []
-        for r in data.get("historical", []):
+        if isinstance(data, dict):
+            historical = data.get("historical", [])
+        else:
+            historical = data
+        historical = sorted(historical, key=lambda x: x.get("date", ""))
+        if days:
+            historical = historical[-days:]
+        for r in historical:
             rows.append(
                 {
                     "date": r["date"],
@@ -47,11 +54,11 @@ class FMPProvider:
         return rows
 
     def quote(self, ticker):
-        data = http_json(self._url(f"/quote/{ticker}"))
+        data = http_json(self._url("/quote", symbol=ticker))
         if isinstance(data, list) and data:
             r = data[0]
             return {
-                "price": r.get("price"),
+                "price": r.get("price") or r.get("close"),
                 "change": r.get("change"),
                 "changesPercentage": r.get("changesPercentage"),
                 "timestamp": r.get("timestamp"),
@@ -59,15 +66,15 @@ class FMPProvider:
         return {}
 
     def news(self, ticker, limit=3):
-        data = http_json(self._url("/stock_news", tickers=ticker, limit=limit))
+        data = http_json(self._url("/news/stock", symbols=ticker, page=0, limit=limit))
         result = []
         for r in data[:limit]:
             result.append(
                 {
-                    "title": r.get("title"),
-                    "site": r.get("site"),
-                    "publishedDate": r.get("publishedDate"),
-                    "url": r.get("url"),
+                    "title": r.get("title") or r.get("headline"),
+                    "site": r.get("site") or r.get("publisher"),
+                    "publishedDate": r.get("publishedDate") or r.get("date"),
+                    "url": r.get("url") or r.get("link"),
                 }
             )
         return result
@@ -75,13 +82,13 @@ class FMPProvider:
     def earnings_calendar(self, ticker, days=7):
         start = datetime.now(timezone.utc).date()
         end = start + timedelta(days=days)
-        data = http_json(self._url("/earning_calendar", from_=str(start), to=str(end)))
+        data = http_json(self._url("/earnings-calendar", from_=str(start), to=str(end)))
         result = []
         for r in data:
             if str(r.get("symbol", "")).upper() == ticker.upper():
                 result.append(
                     {
-                        "date": r.get("date"),
+                        "date": r.get("date") or r.get("fiscalDateEnding"),
                         "title": f"{ticker.upper()} earnings",
                         "impact": "high",
                         "tickers": [ticker.upper()],
@@ -93,9 +100,12 @@ class FMPProvider:
         start = datetime.now(timezone.utc).date()
         end = start + timedelta(days=days)
         try:
-            data = http_json(self._url("/economic_calendar", from_=str(start), to=str(end)))
+            data = http_json(self._url("/economic-calendar", from_=str(start), to=str(end)))
         except Exception:
-            return []
+            try:
+                data = http_json(self._url("/economic_calendar", from_=str(start), to=str(end)))
+            except Exception:
+                return []
         result = []
         keywords = ("FOMC", "Nonfarm", "Payroll", "CPI", "PPI", "Jobless", "ISM", "PMI", "GDP", "Retail")
         for r in data:
