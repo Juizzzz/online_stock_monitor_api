@@ -1,6 +1,6 @@
 # Online Stock Monitor API
 
-这是“全联网版”的股票点位监控服务。n8n 不再执行本地脚本，也不依赖 `/Users/yolo/...` 路径；n8n 只需要定时调用这个 API，然后把返回的 `discord_messages` 发到 Discord Webhook。
+这是“全联网版”的股票点位监控服务。n8n 不再执行本地脚本，n8n 只需要定时调用这个 API，然后把返回的 `discord_messages` 发到 Discord Webhook。
 
 ## 架构
 
