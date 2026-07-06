@@ -5,12 +5,38 @@ import os
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from xml.etree import ElementTree as ET
 
 
 def http_json(url, headers=None, timeout=20):
     req = urllib.request.Request(url, headers=headers or {})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def http_text(url, headers=None, timeout=20):
+    req = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode("utf-8")
+
+
+def google_news_rss(ticker, limit=3):
+    query = f"{ticker.upper()} stock OR earnings OR analyst"
+    params = urllib.parse.urlencode({"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"})
+    xml_text = http_text(f"https://news.google.com/rss/search?{params}")
+    root = ET.fromstring(xml_text)
+    result = []
+    for item in root.findall("./channel/item")[:limit]:
+        result.append(
+            {
+                "title": item.findtext("title"),
+                "site": item.findtext("source"),
+                "publishedDate": item.findtext("pubDate"),
+                "url": item.findtext("link"),
+                "source_type": "google_news_rss",
+            }
+        )
+    return result
 
 
 class FMPProvider:
@@ -66,18 +92,22 @@ class FMPProvider:
         return {}
 
     def news(self, ticker, limit=3):
-        data = http_json(self._url("/news/stock", symbols=ticker, page=0, limit=limit))
-        result = []
-        for r in data[:limit]:
-            result.append(
-                {
-                    "title": r.get("title") or r.get("headline"),
-                    "site": r.get("site") or r.get("publisher"),
-                    "publishedDate": r.get("publishedDate") or r.get("date"),
-                    "url": r.get("url") or r.get("link"),
-                }
-            )
-        return result
+        try:
+            data = http_json(self._url("/news/stock", symbols=ticker, page=0, limit=limit))
+            result = []
+            for r in data[:limit]:
+                result.append(
+                    {
+                        "title": r.get("title") or r.get("headline"),
+                        "site": r.get("site") or r.get("publisher"),
+                        "publishedDate": r.get("publishedDate") or r.get("date"),
+                        "url": r.get("url") or r.get("link"),
+                        "source_type": "fmp",
+                    }
+                )
+            return result
+        except Exception:
+            return google_news_rss(ticker, limit=limit)
 
     def earnings_calendar(self, ticker, days=7):
         start = datetime.now(timezone.utc).date()
